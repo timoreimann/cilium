@@ -613,6 +613,9 @@ const (
 	// DisableCNPStatusUpdates disables updating of CNP NodeStatus in the CNP
 	// CRD.
 	DisableCNPStatusUpdates = "disable-cnp-status-updates"
+
+	// EnableNonLocalNodeIdentity enables use of the non-local-node identity
+	EnableNonLocalNodeIdentity = "enable-non-local-node-identity"
 )
 
 // Default string arguments
@@ -1233,6 +1236,9 @@ type DaemonConfig struct {
 	// pkg/aws/eni/limits.go
 	// e.g. {"a1.medium": "2,4,4", "a2.custom2": "4,5,6"}
 	AwsInstanceLimitMapping map[string]string
+
+	// EnableNonLocalNodeIdentity enables use of the non-local-node identity
+	EnableNonLocalNodeIdentity bool
 }
 
 var (
@@ -1580,6 +1586,7 @@ func (c *DaemonConfig) Populate() {
 	c.DisableK8sServices = viper.GetBool(DisableK8sServices)
 	c.EgressMasqueradeInterfaces = viper.GetString(EgressMasqueradeInterfaces)
 	c.EnableHostReachableServices = viper.GetBool(EnableHostReachableServices)
+	c.EnableNonLocalNodeIdentity = viper.GetBool(EnableNonLocalNodeIdentity)
 	c.DockerEndpoint = viper.GetString(Docker)
 	c.EnableAutoDirectRouting = viper.GetBool(EnableAutoDirectRoutingName)
 	c.EnableEndpointRoutes = viper.GetBool(EnableEndpointRoutes)
