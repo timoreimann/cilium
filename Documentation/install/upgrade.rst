@@ -281,6 +281,19 @@ Removed options
 * ``lb``: The ``--lb`` feature has been removed. If you need load-balancing on
   a particular device, consider using :ref:`nodeport`.
 
+.. _1.7_upgrade_notes:
+
+1.7 Upgrade Notes
+-----------------
+
+New ConfigMap Options
+~~~~~~~~~~~~~~~~~~~~~
+
+  * ``enable-non-local-node-identity`` has been added to enable a new identity
+    for non-local cluster nodes. This allows to treat local and remote cluster
+    nodes differently from a policy perspective. The option is enabled by
+    default for new deployments when generated via Helm and disabled by default
+    for existing deployments to preserve backward compatibility.
 
 .. _1.6_upgrade_notes:
 

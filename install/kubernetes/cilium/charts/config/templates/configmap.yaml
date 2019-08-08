@@ -313,3 +313,4 @@ data:
 {{- if .Values.global.kubeConfigPath }}
   k8s-kubeconfig-path: {{ .Values.global.kubeConfigPath | quote }}
 {{- end }}
+  enable-non-local-node-identity: {{ .Values.global.nonLocalNodeIdentity | quote }}
