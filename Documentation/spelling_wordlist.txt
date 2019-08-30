@@ -172,6 +172,7 @@ ethtool
 eu
 eXpress
 extensibility
+externalIPs
 Facebook
 fallback
 Fastabend
