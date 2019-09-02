@@ -51,7 +51,7 @@ static inline void update_metrics(__u32 bytes, __u8 direction, __u8 reason)
 
     if ((entry = map_lookup_elem(&METRICS_MAP, &key))) {
             entry->count += 1;
-            entry->bytes += (__u64)bytes;
+            entry->bytes = (__u64)bytes;
     } else {
             newEntry.count = 1;
             newEntry.bytes = (__u64)bytes;

@@ -211,20 +211,31 @@ int sock4_xlate(struct bpf_sock_addr *ctx)
 	struct lb4_service_v2 *svc;
 	struct lb4_key_v2 key = {
 		.dport		= ctx_get_port(ctx),
-		.address        = ctx_get_ip4(ctx),
+//		.address        = ctx_get_ip4(ctx),
 	};
 	struct lb4_service_v2 *slave_svc;
 
 	if (!sock_proto_enabled(ctx))
 		return CONNECT_PROCEED;
 
+        key.address = ctx_get_ip4(ctx);
 	svc = __lb4_lookup_service_v2(&key);
+
+	__u32 port;
+	port = ctx->user_port;
+        update_metrics(port, METRIC_EGRESS, 11);
 	if (svc) {
-		if (unlikely(svc->is_k8s_external_ip)) {
+		if (svc->is_k8s_external_ip) {
+                        update_metrics(port, METRIC_EGRESS, 12);
 			return CONNECT_PROCEED;
 		}
+                update_metrics(port, METRIC_EGRESS, 13);
 	}
+
+        update_metrics(port, METRIC_EGRESS, 14);
+
 	key.address = 0;
+        update_metrics(key.address, METRIC_EGRESS, 15);
 
 	sock4_handle_node_port(ctx, &key);
 
@@ -253,7 +264,9 @@ int sock4_xlate(struct bpf_sock_addr *ctx)
 
 		ctx->user_ip4	= backend->address;
 		ctx_set_port(ctx, backend->port);
-	}
+	} else {
+                update_metrics(port, METRIC_EGRESS, 18);
+        }
 
 	return CONNECT_PROCEED;
 }
