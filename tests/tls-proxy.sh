@@ -54,7 +54,7 @@ function proxy_init {
 function policy_single_egress {
   cilium policy delete --all
 
-  cat <<EOF > /var/run/cilium/certs/tests/server/public.crt
+  cat <<EOF > /var/run/cilium/certs/tests/server/tls.crt
 -----BEGIN CERTIFICATE-----
 MIIEYTCCA0mgAwIBAgIJAILStmLgUUcVMA0GCSqGSIb3DQEBCwUAMHYxCzAJBgNV
 BAYTAlVTMRMwEQYDVQQIDApDYWxpZm9ybmlhMRYwFAYDVQQHDA1TYW4gRnJhbmNp
@@ -83,9 +83,9 @@ M8MD3RDSq/90FSiME4vbyNEyTmj0
 -----END CERTIFICATE-----
 EOF
 
-  cat /var/run/cilium/certs/tests/server/public.crt
+  cat /var/run/cilium/certs/tests/server/tls.crt
   
-  cat <<EOF > /var/run/cilium/certs/tests/server/private.crt
+  cat <<EOF > /var/run/cilium/certs/tests/server/private.key
 -----BEGIN RSA PRIVATE KEY-----
 MIIEpAIBAAKCAQEAuvPdQdmwZongPAgQho/Vipd3PZWrQ6BKxIb4l/RvqtVP321I
 UTLs4vVwpXoYJ+12L+XOO3jCInszs53tHjFpTI1GE8/sasmgR6LRr2krwSoVRHPq
@@ -115,7 +115,7 @@ fg7yxbPGinTyraMd0x3Ty924LLscoJMWUBl7qGeQ2iUdnELmZgLN2Q==
 -----END RSA PRIVATE KEY-----
 EOF
 
-  cat /var/run/cilium/certs/tests/server/private.crt
+  cat /var/run/cilium/certs/tests/server/private.key
 
   cat <<EOF > /var/run/cilium/certs/tests/client/ca.crt
 -----BEGIN CERTIFICATE-----
@@ -163,7 +163,8 @@ EOF
 	"toPorts": [{
 	    "ports": [{"port": "443", "protocol": "tcp"}],
 	    "terminatingTLS": {
-	        "directory": "tests/server"
+	        "directory": "tests/server",
+		"privateKey": "private.key"
 	    },
 	    "originatingTLS": {
 	        "directory": "tests/client"
