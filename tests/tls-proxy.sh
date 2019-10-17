@@ -54,6 +54,7 @@ function proxy_init {
 function policy_single_egress {
   cilium policy delete --all
 
+  mkdir -p /var/run/cilium/certs/tests/server
   cat <<EOF > /var/run/cilium/certs/tests/server/tls.crt
 -----BEGIN CERTIFICATE-----
 MIIEYTCCA0mgAwIBAgIJAILStmLgUUcVMA0GCSqGSIb3DQEBCwUAMHYxCzAJBgNV
@@ -117,6 +118,7 @@ EOF
 
   cat /var/run/cilium/certs/tests/server/private.key
 
+  mkdir -p /var/run/cilium/certs/tests/client
   cat <<EOF > /var/run/cilium/certs/tests/client/ca.crt
 -----BEGIN CERTIFICATE-----
 MIIDQTCCAimgAwIBAgITBmyfz5m/jAo54vB4ikPmljZbyjANBgkqhkiG9w0BAQsF
@@ -141,6 +143,7 @@ rqXRfboQnoZsG4q5WTP468SQvvG5
 EOF
 
   cat /var/run/cilium/certs/tests/client/ca.crt
+  cp /var/run/cilium/certs/tests/client/ca.crt /cacert.pem
 
   cat <<EOF | policy_import_and_wait -
 [{
