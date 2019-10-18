@@ -20,7 +20,8 @@ data:
   identity-allocation-mode: crd
 
   # If you want to run cilium in debug mode change this value to true
-  debug: "false"
+  debug: "true"
+  debug-verbose: "flow"
 
   # Enable IPv4 addressing. If enabled, all endpoints are allocated an IPv4
   # address.
@@ -170,6 +171,7 @@ rules:
   - services
   - nodes
   - endpoints
+  - secrets
   verbs:
   - get
   - list
@@ -362,8 +364,8 @@ spec:
               key: custom-cni-conf
               name: cilium-config
               optional: true
-        image: "docker.io/cilium/cilium:latest"
-        imagePullPolicy: Always
+        image: "docker.io/cilium/cilium:jarno-tls-test2"
+        imagePullPolicy: Never
         lifecycle:
           postStart:
             exec:
@@ -543,7 +545,7 @@ spec:
     spec:
       containers:
       - args:
-        - --debug=$(CILIUM_DEBUG)
+        - --debug=true
         - --identity-allocation-mode=$(CILIUM_IDENTITY_ALLOCATION_MODE)
         command:
         - cilium-operator

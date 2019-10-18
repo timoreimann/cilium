@@ -20,3 +20,8 @@ spec:
         http:
         - method: "POST"
           path: "/v1/request-landing"
+          secretHeaders:
+          - name: "User-Agent"
+            secret:
+              namespace: "default"
+              name: "user-agent"
