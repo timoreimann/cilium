@@ -174,8 +174,20 @@ EOF
 	    },
 	    "rules": {
                 "HTTP": [{
+                    "matchHeaders": [{
+                        "name": "User-Agent",
+                        "value": "curl/7.52.1"
+                    }],
 		    "method": "GET",
-		    "path": "/privacy"
+		    "path": "/privacy",
+		    "imposeHeaders": [{
+                        "name": "User-Agent",
+                        "secret": {
+                            "namespace": "default",
+                            "name": "token"
+                        },
+                        "value": "CuRl/x.y.z"
+                    }]
                 }]
 	    }
 	}]
