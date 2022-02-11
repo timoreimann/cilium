@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"time"
 
+	slim_corev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
+	"github.com/cilium/cilium/pkg/node/types"
 	"github.com/sirupsen/logrus"
 
 	"github.com/cilium/cilium/pkg/controller"
@@ -35,7 +37,7 @@ import (
 	go_version "github.com/blang/semver"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 )
 
 const (
@@ -126,6 +128,8 @@ func (epSync *EndpointSynchronizer) RunK8sCiliumEndpointSync(e *endpoint.Endpoin
 					return nil
 				}
 
+				pod := e.GetPod()
+
 				// Initialize the CEP by deleting the upstream instance and recreating
 				// it. Deleting first allows for upgrade scenarios where the format has
 				// changed but our k8s CEP code cannot read in the upstream value.
@@ -142,8 +146,12 @@ func (epSync *EndpointSynchronizer) RunK8sCiliumEndpointSync(e *endpoint.Endpoin
 					localCEP, err = ciliumClient.CiliumEndpoints(namespace).Get(ctx, podName, meta_v1.GetOptions{})
 					// It's only an error if it exists but something else happened
 					switch {
+					case err == nil:
+						// Backfill the CEP UID as we need to do if the CEP was
+						// created on an agent version that did not yet store the
+						// UID at CEP create time.
+						updateCEPUIDIfNeeded(scopedLog, pod, e, localCEP)
 					case k8serrors.IsNotFound(err):
-						pod := e.GetPod()
 						if pod == nil {
 							scopedLog.Debug("Skipping CiliumEndpoint update because it has no k8s pod")
 							return nil
@@ -180,12 +188,14 @@ func (epSync *EndpointSynchronizer) RunK8sCiliumEndpointSync(e *endpoint.Endpoin
 							return err
 						}
 
+						scopedLog.WithField("cep_uid", localCEP.UID).Debug("storing CEP UID after create")
+						e.CiliumEndpointUID = localCEP.UID
+
 						// continue the execution so we update the endpoint
 						// status immediately upon endpoint creation
-					case err != nil:
+					default:
 						scopedLog.WithError(err).Warn("Error getting CEP")
 						return err
-					default:
 					}
 
 					// We return earlier for all error cases so we don't need
@@ -199,24 +209,30 @@ func (epSync *EndpointSynchronizer) RunK8sCiliumEndpointSync(e *endpoint.Endpoin
 				if localCEP == nil {
 					localCEP, err = ciliumClient.CiliumEndpoints(namespace).Get(ctx, podName, meta_v1.GetOptions{})
 					switch {
+					case err == nil:
+						// Backfill the CEP UID as we need to do if the CEP was
+						// created on an agent version that did not yet store the
+						// UID at CEP create time.
+						updateCEPUIDIfNeeded(scopedLog, pod, e, localCEP)
+
 					// The CEP doesn't exist in k8s. This is unexpetected but may occur
 					// if the endpoint was removed from k8s but not yet within the agent.
 					// Mark the CEP for creation on the next controller iteration. This
 					// may never occur if the controller is stopped on Endpoint delete.
-					case err != nil && k8serrors.IsNotFound(err):
+					case k8serrors.IsNotFound(err):
 						needInit = true
 						return err
 
 					// We cannot read the upstream CEP. needInit will cause the next
 					// iteration to delete and create the CEP. This is an unexpected
 					// situation.
-					case err != nil && k8serrors.IsInvalid(err):
+					case k8serrors.IsInvalid(err):
 						scopedLog.WithError(err).Warn("Invalid CEP during update")
 						needInit = true
 						return nil
 
 					// A real error
-					case err != nil:
+					default:
 						scopedLog.WithError(err).Error("Cannot get CEP during update")
 						return err
 					}
@@ -242,7 +258,7 @@ func (epSync *EndpointSynchronizer) RunK8sCiliumEndpointSync(e *endpoint.Endpoin
 					}
 					localCEP, err = ciliumClient.CiliumEndpoints(namespace).Patch(
 						ctx, podName,
-						types.JSONPatchType,
+						k8stypes.JSONPatchType,
 						createStatusPatch,
 						meta_v1.PatchOptions{},
 						"status")
@@ -289,6 +305,21 @@ func (epSync *EndpointSynchronizer) RunK8sCiliumEndpointSync(e *endpoint.Endpoin
 		})
 }
 
+// updateCEPUIDIfNeeded updates the endpoint's CEP UID from the local CEP if the
+// node name from the pod matches the agent's node name and the CEP UID is
+// different (i.e., has never been set on the endpoint or has changed).
+func updateCEPUIDIfNeeded(scopedLog *logrus.Entry, pod *slim_corev1.Pod, e *endpoint.Endpoint, localCEP *cilium_v2.CiliumEndpoint) {
+	if pod != nil && pod.Spec.NodeName == types.GetName() && e.CiliumEndpointUID != localCEP.UID {
+		scopedLog.WithFields(logrus.Fields{
+			"agent_node_name": types.GetName(),
+			"pod_node_name":   pod.Spec.NodeName,
+			"old_cep_uid":     e.CiliumEndpointUID,
+			"new_cep_uid":     localCEP.UID,
+		}).Debug("updating CEP UID")
+		e.CiliumEndpointUID = localCEP.UID
+	}
+}
+
 // DeleteK8sCiliumEndpointSync replaces the endpoint controller to remove the
 // CEP from Kubernetes once the endpoint is stopped / removed from the
 // Cilium agent.
@@ -331,8 +362,31 @@ func deleteCEP(ctx context.Context, scopedLog *logrus.Entry, ciliumClient v2.Cil
 		scopedLog.Debug("Skipping CiliumEndpoint deletion because it has no k8s namespace")
 		return nil
 	}
-	if err := ciliumClient.CiliumEndpoints(namespace).Delete(ctx, podName, meta_v1.DeleteOptions{}); err != nil {
-		if !k8serrors.IsNotFound(err) {
+
+	// A CEP should be only be deleted by the agent that manages the
+	// corresponding pod. However, it is possible for a pod to restart and be
+	// scheduled onto a different node while the agent on the original node was
+	// down, which would cause the CEP to be deleted once the original agent came
+	// back up. (This holds for StatefulSets in particular that come with stable
+	// pod identifiers and thus do not guard against such accidental deletes
+	// through unique pod names.) Storing the CEP UID at CEP create/fetch time
+	// and using it as a precondition for deletion ensures that agents may only
+	// delete CEPs they own.
+	// It is possible for the CEP UID to not be populated when an agent tries to
+	// clean up a CEP. In that case, skip deletion and rely on cilium operator
+	// garbage collection to clean up eventually.
+	if e.CiliumEndpointUID == "" {
+		scopedLog.Debug("Skipping CiliumEndpoint deletion because it has no UID")
+		return nil
+	}
+
+	scopedLog.WithField("cep_uid", e.CiliumEndpointUID).Debug("deleting CEP with UID")
+	if err := ciliumClient.CiliumEndpoints(namespace).Delete(ctx, podName, meta_v1.DeleteOptions{
+		Preconditions: &meta_v1.Preconditions{
+			UID: &e.CiliumEndpointUID,
+		},
+	}); err != nil {
+		if !k8serrors.IsNotFound(err) && !k8serrors.IsConflict(err) {
 			scopedLog.WithError(err).Warning("Unable to delete CEP")
 		}
 	}

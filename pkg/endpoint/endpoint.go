@@ -65,6 +65,7 @@ import (
 	"github.com/cilium/cilium/pkg/policy/trafficdirection"
 	"github.com/cilium/cilium/pkg/proxy/accesslog"
 	"github.com/cilium/cilium/pkg/trigger"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/sirupsen/logrus"
 
@@ -343,6 +344,9 @@ type Endpoint struct {
 	allocator cache.IdentityAllocator
 
 	isHost bool
+
+	// CiliumEndpointUUID is the UUID from the CiliumEndpoint object.
+	CiliumEndpointUID types.UID
 }
 
 // EndpointSyncControllerName returns the controller name to synchronize
