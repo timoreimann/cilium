@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+
 	k8sTypes "k8s.io/apimachinery/pkg/types"
 
 	"github.com/cilium/cilium/api/v1/models"
@@ -1092,32 +1093,28 @@ func (e *Endpoint) hasLabelsRLocked(l labels.Labels) bool {
 	return true
 }
 
-// replaceInformationLabels replaces the information labels of the endpoint that
-// match the respective 'sourceFilter', if 'sourceFilter' is 'LabelSourceAny'
-// then all labels are replaced.
+// replaceInformationLabels replaces the information labels of the endpoint.
 // Passing a nil set of labels will not perform any action.
 // Must be called with e.mutex.Lock().
-func (e *Endpoint) replaceInformationLabels(sourceFilter string, l labels.Labels) {
+func (e *Endpoint) replaceInformationLabels(l labels.Labels) {
 	if l == nil {
 		return
 	}
-	e.OpLabels.ReplaceInformationLabels(sourceFilter, l, e.getLogger())
+	e.OpLabels.ReplaceInformationLabels(l, e.getLogger())
 }
 
-// replaceIdentityLabels replaces the identity labels of the endpoint for the
-// given 'sourceFilter', if 'sourceFilter' is 'LabelSourceAny' then all labels
-// are replaced.
-// If a net changed occurred, the identityRevision is bumped and returned,
-// otherwise 0 is returned.
+// replaceIdentityLabels replaces the identity labels of the endpoint. If a net
+// changed occurred, the identityRevision is bumped and returned, otherwise 0 is
+// returned.
 // Passing a nil set of labels will not perform any action and will return the
 // current endpoint's identityRevision.
 // Must be called with e.mutex.Lock().
-func (e *Endpoint) replaceIdentityLabels(sourceFilter string, l labels.Labels) int {
+func (e *Endpoint) replaceIdentityLabels(l labels.Labels) int {
 	if l == nil {
 		return e.identityRevision
 	}
 
-	changed := e.OpLabels.ReplaceIdentityLabels(sourceFilter, l, e.getLogger())
+	changed := e.OpLabels.ReplaceIdentityLabels(l, e.getLogger())
 	rev := 0
 	if changed {
 		e.identityRevision++
@@ -1577,103 +1574,6 @@ func (e *Endpoint) APICanModifyConfig(n models.ConfigurationMap) error {
 	return nil
 }
 
-// metadataResolver will resolve the endpoint's metadata from a metadata
-// resolver.
-//
-//   - restoredEndpoint - should be set to 'true' if the endpoint is being
-//     restored.
-//
-//   - blocking - will block this function until the endpoint receives a new
-//     security identity, and it is regenerated. If 'false', this
-//     operation will be done in the background and 'regenTriggered'
-//     will always be 'false'.
-//
-//   - bwm - the bandwidth manager used to update the bandwidth policy for this
-//     endpoint.
-//
-//   - resolveMetadata - the metadata resolver that will be used to retrieve this
-//     endpoint's metadata.
-func (e *Endpoint) metadataResolver(ctx context.Context,
-	restoredEndpoint, blocking bool,
-	baseLabels labels.Labels,
-	resolveMetadata MetadataResolverCB,
-) (regenTriggered bool, err error) {
-
-	const resolveLabels = "resolve-labels"
-
-	if !e.K8sNamespaceAndPodNameIsSet() {
-		e.Logger(resolveLabels).Debug("Namespace and Pod are not set")
-		return false, nil
-	}
-
-	// copy the base labels into this local variable
-	// so that we don't override 'baseLabels'.
-	controllerBaseLabels := labels.NewFrom(baseLabels)
-
-	ns, podName := e.GetK8sNamespace(), e.GetK8sPodName()
-
-	pod, cp, identityLabels, info, _, err := resolveMetadata(ns, podName)
-	if err != nil {
-		e.Logger(resolveLabels).WithError(err).Warning("Unable to fetch kubernetes labels")
-		// If we were unable to fetch the k8s endpoints then
-		// we will mark the endpoint with the init identity.
-		if !restoredEndpoint {
-			// Only mark the endpoint with the 'init' identity if we are not
-			// restoring the endpoint from a restart.
-			identityLabels := labels.Labels{
-				labels.IDNameInit: labels.NewLabel(labels.IDNameInit, "", labels.LabelSourceReserved),
-			}
-			regenTriggered := e.UpdateLabels(ctx, labels.LabelSourceAny, identityLabels, nil, true)
-			if blocking {
-				return regenTriggered, err
-			}
-		}
-		return false, err
-	}
-
-	// Merge the labels retrieved from the 'resolveMetadata' into the base
-	// labels.
-	controllerBaseLabels.MergeLabels(identityLabels)
-
-	e.SetPod(pod)
-	e.SetK8sMetadata(cp)
-	e.UpdateNoTrackRules(func(_, _ string) (noTrackPort string, err error) {
-		po, _, _, _, _, err := resolveMetadata(ns, podName)
-		if err != nil {
-			return "", err
-		}
-		value, _ := annotation.Get(po, annotation.NoTrack, annotation.NoTrackAlias)
-		return value, nil
-	})
-	e.UpdateVisibilityPolicy(func(_, _ string) (proxyVisibility string, err error) {
-		po, _, _, _, _, err := resolveMetadata(ns, podName)
-		if err != nil {
-			return "", err
-		}
-		value, _ := annotation.Get(po, annotation.ProxyVisibility, annotation.ProxyVisibilityAlias)
-		return value, nil
-	})
-	e.UpdateBandwidthPolicy(func(ns, podName string) (bandwidthEgress string, err error) {
-		_, _, _, _, annotations, err := resolveMetadata(ns, podName)
-		if err != nil {
-			return "", err
-		}
-		return annotations[bandwidth.EgressBandwidth], nil
-	})
-
-	// If 'baseLabels' are not set then 'controllerBaseLabels' only contains
-	// labels from k8s. Thus, we should only replace the labels that have their
-	// source as 'k8s' otherwise we will risk on replacing other labels that
-	// were added from other sources.
-	source := labels.LabelSourceK8s
-	if len(baseLabels) != 0 {
-		source = labels.LabelSourceAny
-	}
-	regenTriggered = e.UpdateLabels(ctx, source, controllerBaseLabels, info, blocking)
-
-	return regenTriggered, nil
-}
-
 // MetadataResolverCB provides an implementation for resolving the endpoint
 // metadata for an endpoint such as the associated labels and annotations.
 type MetadataResolverCB func(ns, podName string) (pod *slim_corev1.Pod, _ []slim_corev1.ContainerPort, identityLabels labels.Labels, infoLabels labels.Labels, annotations map[string]string, err error)
@@ -1684,96 +1584,74 @@ type MetadataResolverCB func(ns, podName string) (pod *slim_corev1.Pod, _ []slim
 // either the first successful metadata resolution or when the endpoint is
 // removed.
 //
-// baseLabels contains the list of labels use as "base" for the endpoint.
-// The labels retrieved from 'MetadataResolverCB' will be merged into the
-// baseLabels and put into the endpoint.
-// If this list is empty, the labels set on the endpoint will be
-// replaced by the labels returned 'MetadataResolverCB' as long their source
-// matches the source of the labels already present on the endpoint.
-//
-// restoredEndpoint should be set to 'true' if the endpoint is being restored.
-// If this is set to false and the resolver is unable to retrieve the endpoint
-// labels from k8s, the endpoint will be set with the 'init' identity.
-//
-// blocking - will block this function until the endpoint receives a new
-// security identity, and it is regenerated. If 'false', this
-// operation will be done in the background and 'regenTriggered'
-// will always be 'false'.
-//
 // This assumes that after the initial successful resolution, other mechanisms
 // will handle updates (such as pkg/k8s/watchers informers).
-func (e *Endpoint) RunMetadataResolver(restoredEndpoint, blocking bool, baseLabels labels.Labels, resolveMetadata MetadataResolverCB) (regenTriggered bool) {
+func (e *Endpoint) RunMetadataResolver(resolveMetadata MetadataResolverCB) {
+	done := make(chan struct{})
 	const controllerPrefix = "resolve-labels"
-	var regenTriggeredCh chan bool
-	callerBlocked := false
-	if blocking {
-		regenTriggeredCh = make(chan bool)
-		callerBlocked = true
-	}
 	controllerName := fmt.Sprintf("%s-%s", controllerPrefix, e.GetK8sNamespaceAndPodName())
+	go func() {
+		select {
+		case <-done:
+		case <-e.aliveCtx.Done():
+			return
+		}
+		e.controllers.RemoveController(controllerName)
+	}()
 
 	e.controllers.UpdateController(controllerName,
 		controller.ControllerParams{
-			// Do not run this controller again after returning.
-			RunInterval: 0,
 			DoFunc: func(ctx context.Context) error {
-				regenTriggered, err := e.metadataResolver(ctx, restoredEndpoint, blocking, baseLabels, resolveMetadata)
-				// Check if the caller is still blocked.
-				// It might already have been unblocked in a previous run, where resolving metadata
-				// resulted in a regeneration even though it returned an error.
-				if callerBlocked {
-					select {
-					case <-e.aliveCtx.Done():
-					case regenTriggeredCh <- regenTriggered:
-						// First regeneration will close the channel and unblock the caller.
-						// This might be the case even if resolving metadata resulted in an error.
-						close(regenTriggeredCh)
-						callerBlocked = false
-					}
+				ns, podName := e.GetK8sNamespace(), e.GetK8sPodName()
+				pod, cp, identityLabels, info, _, err := resolveMetadata(ns, podName)
+				if err != nil {
+					e.Logger(controllerPrefix).WithError(err).Warning("Unable to fetch kubernetes labels")
+					return err
 				}
-
-				return err
+				e.SetPod(pod)
+				e.SetK8sMetadata(cp)
+				e.UpdateNoTrackRules(func(_, _ string) (noTrackPort string, err error) {
+					po, _, _, _, _, err := resolveMetadata(ns, podName)
+					if err != nil {
+						return "", err
+					}
+					value, _ := annotation.Get(po, annotation.NoTrack, annotation.NoTrackAlias)
+					return value, nil
+				})
+				e.UpdateVisibilityPolicy(func(_, _ string) (proxyVisibility string, err error) {
+					po, _, _, _, _, err := resolveMetadata(ns, podName)
+					if err != nil {
+						return "", err
+					}
+					value, _ := annotation.Get(po, annotation.ProxyVisibility, annotation.ProxyVisibilityAlias)
+					return value, nil
+				})
+				e.UpdateBandwidthPolicy(func(ns, podName string) (bandwidthEgress string, err error) {
+					_, _, _, _, annotations, err := resolveMetadata(ns, podName)
+					if err != nil {
+						return "", err
+					}
+					return annotations[bandwidth.EgressBandwidth], nil
+				})
+				e.UpdateLabels(ctx, identityLabels, info, true)
+				close(done)
+				return nil
 			},
 			Context: e.aliveCtx,
 		},
 	)
-
-	// If the caller wants this function to be blocking while resolving
-	// identities / regenerating then we will wait for the first result of
-	// `e.metadataResolver` before returning.
-	if blocking {
-		select {
-		case regenTriggered, ok := <-regenTriggeredCh:
-			return regenTriggered && ok
-		case <-e.aliveCtx.Done():
-			return false
-		}
-	}
-	return false
-}
-
-// RunRestoredMetadataResolver starts a controller associated with the received
-// endpoint which will periodically attempt to resolve the metadata for the
-// endpoint and update the endpoint with the related. It stops resolving after
-// either the first successful metadata resolution or when the endpoint is
-// removed.
-//
-// This assumes that after the initial successful resolution, other mechanisms
-// will handle updates (such as pkg/k8s/watchers informers).
-func (e *Endpoint) RunRestoredMetadataResolver(resolveMetadata MetadataResolverCB) {
-	e.RunMetadataResolver(true, false, nil, resolveMetadata)
 }
 
 // ModifyIdentityLabels changes the custom and orchestration identity labels of an endpoint.
 // Labels can be added or deleted. If a label change is performed, the
 // endpoint will receive a new identity and will be regenerated. Both of these
 // operations will happen in the background.
-func (e *Endpoint) ModifyIdentityLabels(source string, addLabels, delLabels labels.Labels) error {
+func (e *Endpoint) ModifyIdentityLabels(addLabels, delLabels labels.Labels) error {
 	if err := e.lockAlive(); err != nil {
 		return err
 	}
 
-	changed, err := e.OpLabels.ModifyIdentityLabels(source, addLabels, delLabels)
+	changed, err := e.OpLabels.ModifyIdentityLabels(addLabels, delLabels)
 	if err != nil {
 		e.unlock()
 		return err
@@ -1788,7 +1666,7 @@ func (e *Endpoint) ModifyIdentityLabels(source string, addLabels, delLabels labe
 	if len(addLabels) == 0 && len(delLabels) == 0 && e.IsInit() {
 		idLabls := e.OpLabels.IdentityLabels()
 		delete(idLabls, labels.IDNameInit)
-		rev = e.replaceIdentityLabels(labels.LabelSourceAny, idLabls)
+		rev = e.replaceIdentityLabels(idLabls)
 		changed = true
 	}
 	if changed {
@@ -1828,7 +1706,7 @@ func (e *Endpoint) InitWithIngressLabels(ctx context.Context, launchTime time.Du
 	// Give the endpoint a security identity
 	newCtx, cancel := context.WithTimeout(ctx, launchTime)
 	defer cancel()
-	e.UpdateLabels(newCtx, labels.LabelSourceAny, epLabels, epLabels, true)
+	e.UpdateLabels(newCtx, epLabels, epLabels, true)
 	if errors.Is(newCtx.Err(), context.DeadlineExceeded) {
 		log.WithError(newCtx.Err()).Warning("Timed out while updating security identify for host endpoint")
 	}
@@ -1852,39 +1730,25 @@ func (e *Endpoint) InitWithNodeLabels(ctx context.Context, launchTime time.Durat
 	// Give the endpoint a security identity
 	newCtx, cancel := context.WithTimeout(ctx, launchTime)
 	defer cancel()
-	e.UpdateLabels(newCtx, labels.LabelSourceAny, epLabels, epLabels, true)
+	e.UpdateLabels(newCtx, epLabels, epLabels, true)
 	if errors.Is(newCtx.Err(), context.DeadlineExceeded) {
 		log.WithError(newCtx.Err()).Warning("Timed out while updating security identify for host endpoint")
 	}
 }
 
-// UpdateLabels is called to update the labels of an endpoint for the given
-// 'sourceFilter', if 'source' is 'LabelSourceAny' then all labels are replaced.
-// Calls to this function do not necessarily mean that the labels actually
-// changed. The container runtime layer will periodically synchronize labels.
-//
-// The specified 'sourceFilter' will only remove the labels with that same
-// source.
-// For example:
-// If the endpoint contains `k8s:foo=bar` and
-// if 'sourceFilter' is 'cni' with labels `cni:bar=bar`, the result is:
-//
-//	`k8s:foo=bar` + `cni:bar=bar` - The "foo=bar" label is kept.
-//
-// if 'sourceFilter' is 'any' with labels `cni:bar=bar`, the result is:
-//
-//	`cni:bar=bar` - The "foo=bar" gets removed.
+// UpdateLabels is called to update the labels of an endpoint. Calls to this
+// function do not necessarily mean that the labels actually changed. The
+// container runtime layer will periodically synchronize labels.
 //
 // If a net label changed was performed, the endpoint will receive a new
 // security identity and will be regenerated. Both of these operations will
 // run first synchronously if 'blocking' is true, and then in the background.
 //
 // Returns 'true' if endpoint regeneration was triggered.
-func (e *Endpoint) UpdateLabels(ctx context.Context, sourceFilter string, identityLabels, infoLabels labels.Labels, blocking bool) (regenTriggered bool) {
+func (e *Endpoint) UpdateLabels(ctx context.Context, identityLabels, infoLabels labels.Labels, blocking bool) (regenTriggered bool) {
 	log.WithFields(logrus.Fields{
 		logfields.ContainerID:    e.GetShortContainerID(),
 		logfields.EndpointID:     e.StringID(),
-		logfields.SourceFilter:   sourceFilter,
 		logfields.IdentityLabels: identityLabels.String(),
 		logfields.InfoLabels:     infoLabels.String(),
 	}).Debug("Refreshing labels of endpoint")
@@ -1894,10 +1758,9 @@ func (e *Endpoint) UpdateLabels(ctx context.Context, sourceFilter string, identi
 		return false
 	}
 
-	e.replaceInformationLabels(sourceFilter, infoLabels)
+	e.replaceInformationLabels(infoLabels)
 	// replace identity labels and update the identity if labels have changed
-	rev := e.replaceIdentityLabels(sourceFilter, identityLabels)
-
+	rev := e.replaceIdentityLabels(identityLabels)
 	e.unlock()
 	if rev != 0 {
 		return e.runIdentityResolver(ctx, rev, blocking)
@@ -1914,7 +1777,7 @@ func (e *Endpoint) UpdateLabelsFrom(oldLbls, newLbls map[string]string, source s
 	oldLabels := labels.Map2Labels(oldLbls, source)
 	oldIdtyLabels, _ := labelsfilter.Filter(oldLabels)
 
-	err := e.ModifyIdentityLabels(source, newIdtyLabels, oldIdtyLabels)
+	err := e.ModifyIdentityLabels(newIdtyLabels, oldIdtyLabels)
 	if err != nil {
 		log.WithError(err).Debugf("Error while updating endpoint with new labels")
 		return err
