@@ -176,7 +176,7 @@ func NewHTTPListener(name string, ciliumSecretNamespace string, tls map[model.TL
 }
 
 // NewSNIListenerWithDefaults same as NewSNIListener but with default mutators applied.
-func NewSNIListenerWithDefaults(name string, backendsForHost map[string][]string, mutatorFunc ...ListenerMutator) (ciliumv2.XDSResource, error) {
+func NewSNIListenerWithDefaults(name string, hostnamesForBackend map[string][]string, mutatorFunc ...ListenerMutator) (ciliumv2.XDSResource, error) {
 	fns := append(mutatorFunc,
 		WithSocketOption(
 			defaultTCPKeepAlive,
@@ -184,15 +184,15 @@ func NewSNIListenerWithDefaults(name string, backendsForHost map[string][]string
 			defaultTCPKeepAliveProbeIntervalInSeconds,
 			defaultTCPKeepAliveMaxFailures),
 	)
-	return NewSNIListener(name, backendsForHost, fns...)
+	return NewSNIListener(name, hostnamesForBackend, fns...)
 }
 
 // NewSNIListener creates a new Envoy listener with the given name.
 // The listener will be configured to use SNI to determine thhe backend
-func NewSNIListener(name string, backendsForHost map[string][]string, mutatorFunc ...ListenerMutator) (ciliumv2.XDSResource, error) {
+func NewSNIListener(name string, hostnamesForBackend map[string][]string, mutatorFunc ...ListenerMutator) (ciliumv2.XDSResource, error) {
 	var filterChains []*envoy_config_listener.FilterChain
 
-	for backend, hostNames := range backendsForHost {
+	for backend, hostNames := range hostnamesForBackend {
 		filterChains = append(filterChains, &envoy_config_listener.FilterChain{
 			FilterChainMatch: toFilterChainMatch(hostNames),
 			Filters: []*envoy_config_listener.Filter{

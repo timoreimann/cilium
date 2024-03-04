@@ -117,13 +117,27 @@ func (i *defaultTranslator) getBackendServices(m *model.Model) []*ciliumv2.Servi
 	return res
 }
 
-func (i *defaultTranslator) getServices(_ *model.Model) []*ciliumv2.ServiceListener {
-	return []*ciliumv2.ServiceListener{
-		{
+func (i *defaultTranslator) getServices(m *model.Model) []*ciliumv2.ServiceListener {
+	var listeners []*ciliumv2.ServiceListener
+
+	for _, l := range m.TLS {
+		if len(l.Routes) > 0 {
+			listeners = append(listeners, &ciliumv2.ServiceListener{
+				Name:      i.name,
+				Namespace: i.namespace,
+				Listener:  l.Name,
+			})
+		}
+	}
+
+	if len(listeners) == 0 {
+		listeners = append(listeners, &ciliumv2.ServiceListener{
 			Name:      i.name,
 			Namespace: i.namespace,
-		},
+		})
 	}
+
+	return listeners
 }
 
 func (i *defaultTranslator) getResources(m *model.Model) []ciliumv2.XDSResource {
@@ -161,22 +175,26 @@ func (i *defaultTranslator) getTLSRouteListener(m *model.Model) []ciliumv2.XDSRe
 	if len(m.TLS) == 0 {
 		return nil
 	}
-	backendsMap := make(map[string][]string)
-	for _, h := range m.TLS {
-		for _, route := range h.Routes {
+
+	var res []ciliumv2.XDSResource
+
+	for _, l := range m.TLS {
+		backendsMap := make(map[string][]string)
+		for _, route := range l.Routes {
 			for _, backend := range route.Backends {
 				key := fmt.Sprintf("%s:%s:%s", backend.Namespace, backend.Name, backend.Port.GetPort())
 				backendsMap[key] = append(backendsMap[key], route.Hostnames...)
 			}
 		}
+		if len(backendsMap) == 0 {
+			continue
+		}
+
+		listener, _ := NewSNIListenerWithDefaults(l.Name, backendsMap)
+		res = append(res, listener)
 	}
 
-	if len(backendsMap) == 0 {
-		return nil
-	}
-
-	l, _ := NewSNIListenerWithDefaults("listener", backendsMap)
-	return []ciliumv2.XDSResource{l}
+	return res
 }
 
 // getRouteConfiguration returns the route configuration for the given model.
